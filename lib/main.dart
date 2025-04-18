@@ -20,67 +20,86 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'Message Board App',
       theme: ThemeData(primarySwatch: Colors.blue),
-      home: const SplashScreen(),
+      home: AuthGate(),
     );
   }
 }
 
-class SplashScreen extends StatelessWidget {
-  const SplashScreen({super.key});
-
+class AuthGate extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    Future.delayed(const Duration(seconds: 2), () {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (context) => const LoginPage()),
-      );
-    });
-    return const Scaffold(
-      body: Center(child: Text('Welcome to Chatboards for the New Age')),
+    return StreamBuilder<User?>(
+      stream: FirebaseAuth.instance.authStateChanges(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        if (snapshot.hasData) {
+          return const HomePage();
+        }
+        return LoginScreen();
+      },
     );
   }
 }
 
-class LoginPage extends StatefulWidget {
-  const LoginPage({super.key});
-
+class LoginScreen extends StatefulWidget {
   @override
-  State<LoginPage> createState() => _LoginPageState();
+  _LoginScreenState createState() => _LoginScreenState();
 }
 
-class _LoginPageState extends State<LoginPage> {
-  final emailController = TextEditingController();
-  final passwordController = TextEditingController();
+class _LoginScreenState extends State<LoginScreen> {
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
 
-  Future<void> login() async {
+  Future<void> _login() async {
     try {
       await FirebaseAuth.instance.signInWithEmailAndPassword(
-        email: emailController.text.trim(),
-        password: passwordController.text.trim(),
-      );
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (context) => const HomePage()),
+        email: _emailController.text,
+        password: _passwordController.text,
       );
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Login failed: $e")),
+      print("Login failed: $e");
+    }
+  }
+
+  Future<void> _register() async {
+    try {
+      await FirebaseAuth.instance.createUserWithEmailAndPassword(
+        email: _emailController.text,
+        password: _passwordController.text,
       );
+    } catch (e) {
+      print("Registration failed: $e");
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Login")),
+      appBar: AppBar(title: Text("Login")),
       body: Padding(
-        padding: const EdgeInsets.all(20.0),
+        padding: const EdgeInsets.all(16.0),
         child: Column(
           children: [
-            TextField(controller: emailController, decoration: const InputDecoration(labelText: 'Email')),
-            TextField(controller: passwordController, decoration: const InputDecoration(labelText: 'Password'), obscureText: true),
-            ElevatedButton(onPressed: login, child: const Text("Login")),
+            TextField(
+              controller: _emailController,
+              decoration: InputDecoration(labelText: "Email"),
+            ),
+            TextField(
+              controller: _passwordController,
+              decoration: InputDecoration(labelText: "Password"),
+              obscureText: true,
+            ),
+            SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: _login,
+              child: Text("Login"),
+            ),
+            ElevatedButton(
+              onPressed: _register,
+              child: Text("Register"),
+            ),
           ],
         ),
       ),
@@ -128,31 +147,82 @@ class HomePage extends StatelessWidget {
   }
 }
 
-class ChatPage extends StatelessWidget {
+class ChatPage extends StatefulWidget {
   final String boardName;
   const ChatPage({super.key, required this.boardName});
 
   @override
+  State<ChatPage> createState() => _ChatPageState();
+}
+
+class _ChatPageState extends State<ChatPage> {
+  final TextEditingController _messageController = TextEditingController();
+
+  Future<void> _sendMessage() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (_messageController.text.trim().isEmpty || user == null) return;
+
+    await FirebaseFirestore.instance
+        .collection('messageBoards')
+        .doc(widget.boardName)
+        .collection('messages')
+        .add({
+      'message': _messageController.text.trim(),
+      'user': user.email,
+      'datetime': Timestamp.now(),
+    });
+
+    _messageController.clear();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(boardName)),
-      body: StreamBuilder(
-        stream: FirebaseFirestore.instance
-            .collection('messageBoards')
-            .doc(boardName)
-            .collection('messages')
-            .orderBy('datetime')
-            .snapshots(),
-        builder: (context, snapshot) {
-          if (!snapshot.hasData) return const CircularProgressIndicator();
-          var messages = snapshot.data!.docs;
-          return ListView(
-            children: messages.map((msg) => ListTile(
-              title: Text(msg['message']),
-              subtitle: Text('${msg['user']} • ${msg['datetime'].toDate()}'),
-            )).toList(),
-          );
-        },
+      appBar: AppBar(title: Text(widget.boardName)),
+      body: Column(
+        children: [
+          Expanded(
+            child: StreamBuilder<QuerySnapshot>(
+              stream: FirebaseFirestore.instance
+                  .collection('messageBoards')
+                  .doc(widget.boardName)
+                  .collection('messages')
+                  .orderBy('datetime')
+                  .snapshots(),
+              builder: (context, snapshot) {
+                if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+                final messages = snapshot.data!.docs;
+                return ListView(
+                  children: messages.map((msg) {
+                    return ListTile(
+                      title: Text(msg['message']),
+                      subtitle: Text('${msg['user']} • ${msg['datetime'].toDate()}'),
+                    );
+                  }).toList(),
+                );
+              },
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _messageController,
+                    decoration: const InputDecoration(
+                      hintText: 'Enter your message...',
+                    ),
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.send),
+                  onPressed: _sendMessage,
+                ),
+              ],
+            ),
+          )
+        ],
       ),
     );
   }
@@ -166,7 +236,6 @@ class ProfilePage extends StatelessWidget {
       appBar: AppBar(title: const Text("Profile")),
       body: const Center(child: Text("Edit profile info here.")),
     );
-
   }
 }
 
@@ -175,11 +244,6 @@ class SettingsPage extends StatelessWidget {
 
   void logout(BuildContext context) async {
     await FirebaseAuth.instance.signOut();
-    Navigator.pushAndRemoveUntil(
-      context,
-      MaterialPageRoute(builder: (_) => const LoginPage()),
-      (route) => false,
-    );
   }
 
   @override
